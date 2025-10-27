@@ -1,0 +1,80 @@
+import time
+import threading
+import os
+
+# --- Game Variables ---
+money = 0
+lemons_per_click = 1
+lemons_per_second = 0
+upgrade_cost = 10
+running = True
+
+
+# --- Helper Functions ---
+def clear():
+    """Clear the terminal screen."""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+
+def auto_income():
+    """Add automatic income every second."""
+    global money
+    while running:
+        money += lemons_per_second
+        time.sleep(1)
+
+
+def show_stats():
+    """Display the game stats."""
+    clear()
+    print("🍋 LEMON CLICKER IDLE GAME 🍋")
+    print("-" * 30)
+    print(f"Money: ${money}")
+    print(f"Lemons per click: {lemons_per_click}")
+    print(f"Lemons per second: {lemons_per_second}")
+    print(f"Upgrade cost: ${upgrade_cost}")
+    print("-" * 30)
+    print("Commands:")
+    print("[C]lick  |  [B]uy upgrade  |  [Q]uit")
+
+
+def click():
+    """Click to earn money."""
+    global money
+    money += lemons_per_click
+
+
+def buy_upgrade():
+    """Buy an upgrade to increase automatic income."""
+    global money, lemons_per_second, upgrade_cost
+    if money >= upgrade_cost:
+        money -= upgrade_cost
+        lemons_per_second += 1
+        upgrade_cost = int(upgrade_cost * 1.5)
+        print(f"✅ Upgrade bought! Lemons per second is now {lemons_per_second}.")
+    else:
+        print("❌ Not enough money for upgrade!")
+    time.sleep(1)
+
+
+# --- Start Auto-Income Thread ---
+income_thread = threading.Thread(target=auto_income)
+income_thread.daemon = True
+income_thread.start()
+
+
+# --- Main Game Loop ---
+while running:
+    show_stats()
+    choice = input("What do you want to do? ").lower().strip()
+
+    if choice == "c":
+        click()
+    elif choice == "b":
+        buy_upgrade()
+    elif choice == "q":
+        running = False
+        print("👋 Thanks for playing Lemon Clicker!")
+    else:
+        print("❓ Invalid command!")
+        time.sleep(1)
