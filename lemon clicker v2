@@ -1,0 +1,104 @@
+import time
+import json
+import os
+
+# === Lemon Clicker Game ===
+SAVE_FILE = "lemon_save.json"
+
+# Load saved progress if it exists
+def load_game():
+    if os.path.exists(SAVE_FILE):
+        with open(SAVE_FILE, "r") as f:
+            return json.load(f)
+    return {"lemons": 0, "auto_clickers": 0, "trees": 0}
+
+# Save progress
+def save_game(data):
+    with open(SAVE_FILE, "w") as f:
+        json.dump(data, f)
+
+# Game state
+game = load_game()
+
+# Upgrade costs
+AUTO_CLICKER_COST = 50
+TREE_COST = 250
+
+# Auto clicker effect
+def auto_click(game):
+    return game["auto_clickers"] * 1 + game["trees"] * 5
+
+# Main loop
+def main():
+    print("🍋 Welcome to Lemon Clicker! 🍋")
+    print("Type:")
+    print("  [c]lick to get lemons")
+    print("  [b]uy to shop upgrades")
+    print("  [s]tatus to view progress")
+    print("  [q]uit to save and exit\n")
+
+    while True:
+        lemons = game["lemons"]
+        print(f"\nYou have {lemons:.0f} 🍋 lemons.")
+        cmd = input("> ").strip().lower()
+
+        if cmd == "c":
+            game["lemons"] += 1
+            print("You squeezed a lemon! 🍋 +1")
+
+        elif cmd == "b":
+            print("\n=== Lemon Shop ===")
+            print(f"1. Auto Clicker ({AUTO_CLICKER_COST} 🍋 each) — auto adds 1 lemon/sec")
+            print(f"2. Lemon Tree ({TREE_COST} 🍋 each) — adds 5 lemons/sec")
+            print("3. Back")
+            choice = input("Buy which? ").strip()
+
+            if choice == "1":
+                if game["lemons"] >= AUTO_CLICKER_COST:
+                    game["lemons"] -= AUTO_CLICKER_COST
+                    game["auto_clickers"] += 1
+                    print("🤖 Bought an Auto Clicker!")
+                else:
+                    print("Not enough lemons!")
+            elif choice == "2":
+                if game["lemons"] >= TREE_COST:
+                    game["lemons"] -= TREE_COST
+                    game["trees"] += 1
+                    print("🌳 Planted a Lemon Tree!")
+                else:
+                    print("Not enough lemons!")
+            elif choice == "3":
+                continue
+
+        elif cmd == "s":
+            print("\n=== Your Lemon Empire ===")
+            print(f"Lemons: {game['lemons']}")
+            print(f"Auto Clickers: {game['auto_clickers']}")
+            print(f"Lemon Trees: {game['trees']}\n")
+
+        elif cmd == "q":
+            save_game(game)
+            print("Game saved! 🍋 See you next time!")
+            break
+
+        else:
+            print("Invalid command. Try again.")
+
+        # Auto gain over time
+        gained = auto_click(game)
+        game["lemons"] += gained
+        if gained > 0:
+            print(f"(+{gained} from your workers 🌳🤖)")
+
+        time.sleep(1)
+
+        # ...existing code...
+        time.sleep(1)
+
+# ...existing code...
+if __name__ == "__main__":
+    main()
+
+--------------------------
+Run code (do not paste code and this)
+cd /Users/nickolaskuznetson && python3 lemonsequel99.py
