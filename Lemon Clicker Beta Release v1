@@ -1,0 +1,308 @@
+import json
+import os
+import tkinter as tk
+from tkinter import ttk, messagebox
+from dataclasses import dataclass, field
+from typing import List, Dict
+
+SAVE_FILE = os.path.join(os.path.expanduser('~'), '.lemon_clicker_save.json')
+
+
+def format_num(n: float) -> str:
+	return f"{int(n):,}"
+
+
+@dataclass
+class ShopItem:
+	id: str
+	name: str
+	base_cost: float
+	owned: int = 0
+	lps: float = 0.0
+
+
+@dataclass
+class GameState:
+	lemons: float = 0.0
+	lps: float = 0.0
+	lpc: float = 1.0
+	shop: List[ShopItem] = field(default_factory=lambda: [
+		ShopItem('squeezer', 'Squeezer', 10, 0, 0.1),
+		ShopItem('farm', 'Lemon Farm', 100, 0, 1.0),
+	])
+
+	def cost_of(self, item: ShopItem) -> float:
+		return item.base_cost * (1.15 ** item.owned)
+
+	def buy(self, item_id: str) -> bool:
+		for item in self.shop:
+			if item.id == item_id:
+				cost = self.cost_of(item)
+				if self.lemons >= cost:
+					self.lemons -= cost
+					item.owned += 1
+					self.recalculate_lps()
+					return True
+				return False
+		return False
+
+	def recalculate_lps(self):
+		self.lps = sum(item.lps * item.owned for item in self.shop)
+
+
+# Small custom button implemented with Canvas so colors show consistently across platforms
+class ColorButton(tk.Canvas):
+	def __init__(self, master, text, command=None, width=72, height=28, bg='#95a5a6', fg='#000000', activebg='#2ecc71', **kwargs):
+		super().__init__(master, width=width, height=height, highlightthickness=0, bd=0, bg=master.cget('bg'))
+		self._width = width
+		self._height = height
+		self._command = command
+		self._text = text
+		self._bg = bg
+		self._fg = fg
+		self._activebg = activebg
+		self._enabled = False
+
+		self._rect = self.create_rectangle(2, 2, width-2, height-2, outline='#444', fill=self._bg, width=1, tags='rect')
+		self._label = self.create_text(width//2, height//2, text=self._text, fill=self._fg, font=('Helvetica', 10, 'bold'), tags='label')
+		self.bind('<Button-1>', self._on_click)
+		self.bind('<Enter>', lambda e: self.itemconfigure(self._rect, outline='#222'))
+		self.bind('<Leave>', lambda e: self.itemconfigure(self._rect, outline='#444'))
+
+	def _on_click(self, event):
+		if self._enabled and self._command:
+			try:
+				self._command()
+			except Exception:
+				pass
+
+	def set_state(self, enabled: bool, bg: str = None, fg: str = None):
+		self._enabled = bool(enabled)
+		if bg:
+			self._bg = bg
+		if fg:
+			self._fg = fg
+		fill = self._bg if self._enabled else self._bg
+		self.itemconfigure(self._rect, fill=fill)
+		self.itemconfigure(self._label, fill=self._fg)
+		# visually dim when disabled
+		if not self._enabled:
+			self.itemconfigure(self._rect, stipple='gray25')
+		else:
+			self.itemconfigure(self._rect, stipple='')
+
+	def config(self, **kwargs):
+		# support minimal config interface used elsewhere
+		if 'bg' in kwargs:
+			self._bg = kwargs.pop('bg')
+		if 'fg' in kwargs:
+			self._fg = kwargs.pop('fg')
+		if 'state' in kwargs:
+			self.set_state(kwargs.pop('state') == 'normal')
+		if 'command' in kwargs:
+			self._command = kwargs.pop('command')
+		# apply current values
+		self.itemconfigure(self._rect, fill=self._bg)
+		self.itemconfigure(self._label, fill=self._fg)
+
+
+def save_game(state: GameState) -> None:
+	try:
+		data = {
+			'lemons': state.lemons,
+			'lpc': state.lpc,
+			'shop': [{'id': i.id, 'owned': i.owned} for i in state.shop],
+		}
+		with open(SAVE_FILE, 'w') as f:
+			json.dump(data, f)
+	except Exception:
+		pass
+
+
+def load_game(state: GameState) -> bool:
+	if not os.path.exists(SAVE_FILE):
+		return False
+	try:
+		with open(SAVE_FILE, 'r') as f:
+			data = json.load(f)
+		state.lemons = data.get('lemons', state.lemons)
+		state.lpc = data.get('lpc', state.lpc)
+		shop_data = {s['id']: s['owned'] for s in data.get('shop', [])}
+		for item in state.shop:
+			item.owned = shop_data.get(item.id, item.owned)
+		state.recalculate_lps()
+		return True
+	except Exception:
+		return False
+
+
+class LemonClickerApp(tk.Tk):
+	TICK_MS = 1000
+
+	def __init__(self, state: GameState):
+		super().__init__()
+		self.title('Lemon Clicker')
+		# set a blue background for the main window
+		self_bg = '#6fb3ff'  # pleasant light blue
+		self.configure(bg=self_bg)
+		# color palette
+		primary_btn_bg = '#ffb74d'  # warm orange complementary to blue
+		primary_btn_fg = '#000000'
+		buy_available_bg = '#2ecc71'   # green
+		buy_available_fg = '#ffffff'
+		buy_unavailable_bg = '#95a5a6' # gray
+		buy_unavailable_fg = '#000000'
+		self.state = state
+
+		self.lemons_var = tk.StringVar()
+		self.lps_var = tk.StringVar()
+		self.lpc_var = tk.StringVar()
+
+		# use tk.Frame so we can control background color
+		# header: logo + title
+		header = tk.Frame(self, bg=self_bg, padx=10, pady=6)
+		header.pack(fill='x')
+		if 'photo' in locals() and photo:
+			logo_lbl = tk.Label(header, image=photo, bg=self_bg)
+			logo_lbl.image = photo
+			logo_lbl.pack()
+		else:
+			logo_lbl = tk.Label(header, text='🍋', font=('Helvetica', 32), bg=self_bg)
+			logo_lbl.pack()
+		logo_title = tk.Label(header, text='Lemon Clicker Beta Release', font=('Helvetica', 16, 'bold'), bg=self_bg)
+		logo_title.pack()
+
+		# main info row
+		top = tk.Frame(self, bg=self_bg, padx=10, pady=10)
+		top.pack(fill='x')
+
+		# use tk.Label so background shows through consistently
+		lbl_lemon = tk.Label(top, text='Lemons:', bg=self_bg)
+		lbl_lemon.grid(row=0, column=0, sticky='w')
+		val_lemon = tk.Label(top, textvariable=self.lemons_var, bg=self_bg)
+		val_lemon.grid(row=0, column=1, sticky='w')
+		lbl_lps = tk.Label(top, text='LPS:', bg=self_bg)
+		lbl_lps.grid(row=1, column=0, sticky='w')
+		val_lps = tk.Label(top, textvariable=self.lps_var, bg=self_bg)
+		val_lps.grid(row=1, column=1, sticky='w')
+
+		center = tk.Frame(self, bg=self_bg, padx=10, pady=10)
+		center.pack(fill='both', expand=True)
+
+		# Use emoji click button (no image)
+		self.click_button = tk.Button(center, text='🍋', command=self.click_lemon, font=('Helvetica', 24), bg=primary_btn_bg, fg=primary_btn_fg, activebackground=primary_btn_bg)
+		self.click_button.pack(pady=6)
+
+		shop_frame = tk.LabelFrame(self, text='Shop', bg=self_bg, padx=8, pady=8)
+		shop_frame.pack(fill='x', padx=10, pady=6)
+
+		self.shop_items: Dict[str, Dict] = {}
+		for item in self.state.shop:
+			row = tk.Frame(shop_frame, bg=self_bg)
+			row.pack(fill='x', pady=2)
+			lbl = tk.Label(row, text=item.name, bg=self_bg)
+			lbl.pack(side='left')
+			cost_var = tk.StringVar()
+			owned_var = tk.StringVar()
+			# use ColorButton so colors render consistently
+			btn = ColorButton(
+				row,
+				text='Buy',
+				command=lambda iid=item.id: self.buy_item(iid),
+				width=72,
+				height=28,
+				bg=buy_unavailable_bg,
+				fg=buy_unavailable_fg,
+				activebg=buy_available_bg,
+			)
+			btn.pack(side='right')
+			lbl_cost = tk.Label(row, textvariable=cost_var, bg=self_bg)
+			lbl_cost.pack(side='right', padx=6)
+			lbl_owned = tk.Label(row, textvariable=owned_var, bg=self_bg)
+			lbl_owned.pack(side='right', padx=6)
+			self.shop_items[item.id] = {'cost_var': cost_var, 'owned_var': owned_var, 'button': btn}
+
+		bottom = tk.Frame(self, bg=self_bg, padx=8, pady=8)
+		bottom.pack(fill='x')
+		tk.Button(bottom, text='Save', command=self.save).pack(side='left', padx=6)
+		tk.Button(bottom, text='Load', command=self.load).pack(side='left', padx=6)
+		tk.Button(bottom, text='Reset', command=self.reset_game).pack(side='left', padx=6)
+		tk.Button(bottom, text='About', command=self.show_about).pack(side='right', padx=6)
+
+		# start tick
+		self.update_ui()
+		self.after(self.TICK_MS, self.tick)
+
+	# --- UI actions ---
+	def click_lemon(self):
+		self.state.lemons += self.state.lpc
+		self.update_ui()
+
+	def buy_item(self, item_id):
+		if self.state.buy(item_id):
+			self.update_ui()
+		else:
+			messagebox.showinfo('Not enough lemons', "You don't have enough lemons for that!")
+
+	def save(self):
+		save_game(self.state)
+		messagebox.showinfo('Saved', f'Game saved to {SAVE_FILE}')
+
+	def load(self):
+		if load_game(self.state):
+			self.update_ui()
+			messagebox.showinfo('Loaded', f'Game loaded from {SAVE_FILE}')
+		else:
+			messagebox.showinfo('Load failed', 'No save file found or failed to load.')
+
+	def reset_game(self):
+		if messagebox.askyesno('Reset', 'Reset game to initial state? This will overwrite current progress.'):
+			self.state = GameState()
+			self.update_ui()
+
+	def show_about(self):
+		messagebox.showinfo('About Lemon Clicker', 'Lemon Clicker\nA tiny clicker game made with Python and tkinter.\nEnjoy!')
+
+	# --- Game loop ---
+	def tick(self):
+		# Called every TICK_MS milliseconds to apply LPS income
+		self.state.lemons += self.state.lps * (self.TICK_MS / 1000.0)
+		self.update_ui()
+		self.after(self.TICK_MS, self.tick)
+
+	# --- UI refresh ---
+	def update_ui(self):
+		self.lemons_var.set(format_num(self.state.lemons))
+		self.lps_var.set(format_num(self.state.lps))
+		self.lpc_var.set(format_num(self.state.lpc))
+		# update shop labels and enable/disable buy buttons
+		# colors for buy button states
+		buy_available_bg = '#2ecc71'   # green
+		buy_available_fg = '#ffffff'
+		buy_unavailable_bg = '#95a5a6' # gray
+		buy_unavailable_fg = '#000000'
+		for item in self.state.shop:
+			widgets = self.shop_items[item.id]
+			cost = self.state.cost_of(item)
+			widgets['cost_var'].set(format_num(cost))
+			widgets['owned_var'].set(f'Owned: {item.owned}')
+			if self.state.lemons >= cost:
+				# enable and set green
+				try:
+					widgets['button'].set_state(True, bg=buy_available_bg, fg=buy_available_fg)
+				except Exception:
+					widgets['button'].config(state='normal', bg=buy_available_bg, fg=buy_available_fg)
+			else:
+				# disable and set gray
+				try:
+					widgets['button'].set_state(False, bg=buy_unavailable_bg, fg=buy_unavailable_fg)
+				except Exception:
+					widgets['button'].config(state='disabled', bg=buy_unavailable_bg, fg=buy_unavailable_fg)
+
+
+if __name__ == '__main__':
+	state = GameState()
+	# try to load on startup (no popups)
+	load_game(state)
+	app = LemonClickerApp(state)
+	app.mainloop()
