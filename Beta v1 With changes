@@ -1,0 +1,441 @@
+import json
+import os
+import tkinter as tk
+from tkinter import ttk, messagebox
+from dataclasses import dataclass, field
+from typing import List, Dict
+
+SAVE_FILE = os.path.join(os.path.expanduser('~'), '.lemon_clicker_save.json')
+
+
+def format_num(n: float) -> str:
+	return f"{int(n):,}"
+
+
+@dataclass
+class ShopItem:
+	id: str
+	name: str
+	base_cost: float
+	owned: int = 0
+	lps: float = 0.0
+
+
+@dataclass
+class GameState:
+	lemons: float = 0.0
+	lps: float = 0.0
+	lpc: float = 1.0
+	shop: List[ShopItem] = field(default_factory=lambda: [
+		ShopItem('squeezer', 'Squeezer', 10, 0, 1.0),
+		ShopItem('farm', 'Lemon Farm', 100, 0, 5.0),
+		ShopItem('worker', 'Helper Worker', 500, 0, 20.0),
+		ShopItem('factory', 'Factory', 2500, 0, 150.0),
+		ShopItem('orchard', 'Lemon Orchard', 12000, 0, 1000.0),
+	])
+
+	def cost_of(self, item: ShopItem) -> float:
+		return item.base_cost * (1.15 ** item.owned)
+
+	def buy(self, item_id: str) -> bool:
+		for item in self.shop:
+			if item.id == item_id:
+				cost = self.cost_of(item)
+				if self.lemons >= cost:
+					self.lemons -= cost
+					item.owned += 1
+					self.recalculate_lps()
+					return True
+				return False
+		return False
+
+	def recalculate_lps(self):
+		self.lps = sum(item.lps * item.owned for item in self.shop)
+
+
+# Small custom button implemented with Canvas so colors show consistently across platforms
+class ColorButton(tk.Canvas):
+	def __init__(self, master, text, command=None, width=72, height=28, bg='#95a5a6', fg='#000000', activebg='#2ecc71', **kwargs):
+		super().__init__(master, width=width, height=height, highlightthickness=0, bd=0, bg=master.cget('bg'))
+		self._width = width
+		self._height = height
+		self._command = command
+		self._text = text
+		self._bg = bg
+		self._fg = fg
+		self._activebg = activebg
+		self._enabled = False
+
+		self._rect = self.create_rectangle(2, 2, width-2, height-2, outline='#444', fill=self._bg, width=1, tags='rect')
+		self._label = self.create_text(width//2, height//2, text=self._text, fill=self._fg, font=('Helvetica', 10, 'bold'), tags='label')
+		self.bind('<Button-1>', self._on_click)
+		self.bind('<Enter>', lambda e: self.itemconfigure(self._rect, outline='#222'))
+		self.bind('<Leave>', lambda e: self.itemconfigure(self._rect, outline='#444'))
+
+	def set_size(self, width: int, height: int, font_size: int = 10):
+		# Resize the canvas and reposition inner items
+		self._width = int(width)
+		self._height = int(height)
+		try:
+			self.config(width=self._width, height=self._height)
+		except Exception:
+			pass
+		try:
+			self.coords(self._rect, 2, 2, self._width - 2, self._height - 2)
+			self.coords(self._label, self._width // 2, self._height // 2)
+		except Exception:
+			pass
+		# update font size for label
+		try:
+			self.itemconfigure(self._label, font=('Helvetica', max(8, int(font_size)), 'bold'))
+		except Exception:
+			pass
+
+	def _on_click(self, event):
+		if self._enabled and self._command:
+			try:
+				self._command()
+			except Exception:
+				pass
+
+	def set_state(self, enabled: bool, bg: str = None, fg: str = None):
+		self._enabled = bool(enabled)
+		if bg:
+			self._bg = bg
+		if fg:
+			self._fg = fg
+		fill = self._bg if self._enabled else self._bg
+		self.itemconfigure(self._rect, fill=fill)
+		self.itemconfigure(self._label, fill=self._fg)
+		# visually dim when disabled
+		if not self._enabled:
+			self.itemconfigure(self._rect, stipple='gray25')
+		else:
+			self.itemconfigure(self._rect, stipple='')
+
+	def config(self, **kwargs):
+		# support minimal config interface used elsewhere
+		if 'bg' in kwargs:
+			self._bg = kwargs.pop('bg')
+		if 'fg' in kwargs:
+			self._fg = kwargs.pop('fg')
+		if 'state' in kwargs:
+			self.set_state(kwargs.pop('state') == 'normal')
+		if 'command' in kwargs:
+			self._command = kwargs.pop('command')
+		# apply current values
+		self.itemconfigure(self._rect, fill=self._bg)
+		self.itemconfigure(self._label, fill=self._fg)
+
+
+
+def save_game(state: GameState) -> None:
+	try:
+		data = {
+			'lemons': state.lemons,
+			'lpc': state.lpc,
+			'shop': [{'id': i.id, 'owned': i.owned} for i in state.shop],
+		}
+		with open(SAVE_FILE, 'w') as f:
+			json.dump(data, f)
+	except Exception:
+		pass
+
+
+def load_game(state: GameState) -> bool:
+	if not os.path.exists(SAVE_FILE):
+		return False
+	try:
+		with open(SAVE_FILE, 'r') as f:
+			data = json.load(f)
+		state.lemons = data.get('lemons', state.lemons)
+		state.lpc = data.get('lpc', state.lpc)
+		shop_data = {s['id']: s['owned'] for s in data.get('shop', [])}
+		for item in state.shop:
+			item.owned = shop_data.get(item.id, item.owned)
+		state.recalculate_lps()
+		return True
+	except Exception:
+		return False
+
+
+class LemonClickerApp(tk.Tk):
+	TICK_MS = 1000
+
+	def __init__(self, state: GameState):
+		super().__init__()
+		self.title('Lemon Clicker')
+		# set a blue background for the main window
+		self.bg_color = '#6fb3ff'  # pleasant light blue
+		self.configure(bg=self.bg_color)
+		# color palette (store on self so other methods can access)
+		self.primary_btn_bg = '#ffb74d'  # warm orange complementary to blue
+		self.primary_btn_fg = '#000000'
+		self.buy_available_bg = '#2ecc71'   # green
+		self.buy_available_fg = '#ffffff'
+		self.buy_unavailable_bg = '#95a5a6' # gray
+		self.buy_unavailable_fg = '#000000'
+		self.state = state
+
+		self.lemons_var = tk.StringVar()
+		self.lps_var = tk.StringVar()
+		self.lpc_var = tk.StringVar()
+
+		# use tk.Frame so we can control background color
+		# header: logo + title
+		header = tk.Frame(self, bg=self.bg_color, padx=10, pady=6)
+		header.pack(fill='x')
+		# keep references on self so scaling can access them
+		if 'photo' in locals() and photo:
+			self.logo_label = tk.Label(header, image=photo, bg=self.bg_color)
+			self.logo_label.image = photo
+			self.logo_label.pack()
+		else:
+			self.logo_label = tk.Label(header, text='🍋', font=('Helvetica', 32), bg=self.bg_color)
+			self.logo_label.pack()
+		self.logo_title = tk.Label(header, text='Lemon Clicker Beta Release', font=('Helvetica', 16, 'bold'), bg=self.bg_color)
+		self.logo_title.pack()
+
+		# main info row
+		top = tk.Frame(self, bg=self.bg_color, padx=10, pady=10)
+		top.pack(fill='x')
+
+		# use tk.Label so background shows through consistently
+		self.lbl_lemon = tk.Label(top, text='Lemons:', bg=self.bg_color)
+		self.lbl_lemon.grid(row=0, column=0, sticky='w')
+		self.val_lemon = tk.Label(top, textvariable=self.lemons_var, bg=self.bg_color)
+		self.val_lemon.grid(row=0, column=1, sticky='w')
+		self.lbl_lps = tk.Label(top, text='LPS:', bg=self.bg_color)
+		self.lbl_lps.grid(row=1, column=0, sticky='w')
+		self.val_lps = tk.Label(top, textvariable=self.lps_var, bg=self.bg_color)
+		self.val_lps.grid(row=1, column=1, sticky='w')
+
+		center = tk.Frame(self, bg=self.bg_color, padx=10, pady=10)
+		center.pack(fill='both', expand=True)
+
+		# Use emoji click button (no image)
+		self.click_button = tk.Button(center, text='🍋', command=self.click_lemon, font=('Helvetica', 24), bg=self.primary_btn_bg, fg=self.primary_btn_fg, activebackground=self.primary_btn_bg)
+		self.click_button.pack(pady=6)
+
+		# shop will be shown in a separate window via the Shop button
+		self.shop_window = None
+		self.shop_items: Dict[str, Dict] = {}
+
+		bottom = tk.Frame(self, bg=self.bg_color, padx=8, pady=8)
+		bottom.pack(fill='x')
+		self.save_btn = tk.Button(bottom, text='Save', command=self.save)
+		self.save_btn.pack(side='left', padx=6)
+		self.load_btn = tk.Button(bottom, text='Load', command=self.load)
+		self.load_btn.pack(side='left', padx=6)
+		self.reset_btn = tk.Button(bottom, text='Reset', command=self.reset_game)
+		self.reset_btn.pack(side='left', padx=6)
+		self.about_btn = tk.Button(bottom, text='About', command=self.show_about)
+		self.about_btn.pack(side='right', padx=6)
+		# Shop button opens a separate shop window
+		self.shop_btn = tk.Button(bottom, text='Open Shop', command=self.open_shop)
+		self.shop_btn.pack(side='right', padx=6)
+
+		# start tick
+		self.update_ui()
+		# bind resize to adjust UI for fullscreen while preserving compact view when small
+		self.bind('<Configure>', self.on_resize)
+		self.after(self.TICK_MS, self.tick)
+
+	# --- UI actions ---
+	def click_lemon(self):
+		self.state.lemons += self.state.lpc
+		self.update_ui()
+
+	def buy_item(self, item_id):
+		if self.state.buy(item_id):
+			self.update_ui()
+		else:
+			messagebox.showinfo('Not enough lemons', "You don't have enough lemons for that!")
+
+	def save(self):
+		save_game(self.state)
+		messagebox.showinfo('Saved', f'Game saved to {SAVE_FILE}')
+
+	def load(self):
+		if load_game(self.state):
+			self.update_ui()
+			messagebox.showinfo('Loaded', f'Game loaded from {SAVE_FILE}')
+		else:
+			messagebox.showinfo('Load failed', 'No save file found or failed to load.')
+
+	def reset_game(self):
+		if messagebox.askyesno('Reset', 'Reset game to initial state? This will overwrite current progress.'):
+			self.state = GameState()
+			self.update_ui()
+
+	def show_about(self):
+		messagebox.showinfo(
+			'About Lemon Clicker',
+			('Lemon Clicker\n'
+			 'A tiny clicker game made with Python and tkinter.\n'
+			 'Enjoy!\n\n'
+			 'Made by githubman9087\n'
+			 '\u00A9 2025')
+		)
+
+	def open_shop(self):
+		"""Open the shop in a separate Toplevel window."""
+		# if already open, lift it
+		if getattr(self, 'shop_window', None):
+			try:
+				self.shop_window.lift()
+				return
+			except Exception:
+				self.shop_window = None
+
+		self.shop_window = tk.Toplevel(self)
+		self.shop_window.title('Shop')
+		self.shop_window.configure(bg=self.bg_color)
+
+		frame = tk.Frame(self.shop_window, bg=self.bg_color, padx=10, pady=10)
+		frame.pack(fill='both', expand=True)
+
+		# create rows for each shop item in the Toplevel
+		self.shop_items = {}
+		for item in self.state.shop:
+			row = tk.Frame(frame, bg=self.bg_color)
+			row.pack(fill='x', pady=4)
+			lbl = tk.Label(row, text=item.name, bg=self.bg_color)
+			lbl.pack(side='left')
+			cost_var = tk.StringVar()
+			owned_var = tk.StringVar()
+			btn = ColorButton(row, text='Buy', command=lambda iid=item.id: self.buy_item(iid), width=90, height=30, bg=self.buy_unavailable_bg, fg=self.buy_unavailable_fg, activebg=self.buy_available_bg)
+			btn.pack(side='right')
+			lbl_cost = tk.Label(row, textvariable=cost_var, bg=self.bg_color)
+			lbl_cost.pack(side='right', padx=8)
+			lbl_owned = tk.Label(row, textvariable=owned_var, bg=self.bg_color)
+			lbl_owned.pack(side='right', padx=8)
+			self.shop_items[item.id] = {'cost_var': cost_var, 'owned_var': owned_var, 'button': btn}
+
+		# update UI immediately for shop window
+		self.update_ui()
+
+		# ensure UI scales to current window size
+		self.apply_scale_for_window()
+
+		# handle close
+		self.shop_window.protocol('WM_DELETE_WINDOW', lambda: self._close_shop())
+
+	def _close_shop(self):
+		if getattr(self, 'shop_window', None):
+			try:
+				self.shop_window.destroy()
+			except Exception:
+				pass
+		self.shop_window = None
+
+	def apply_scale_for_window(self):
+		# compute scale relative to a baseline size
+		try:
+			w = max(200, self.winfo_width())
+			h = max(200, self.winfo_height())
+		except Exception:
+			w, h = 800, 600
+		base_w, base_h = 800.0, 600.0
+		scale = min(w / base_w, h / base_h)
+		if scale < 1.0:
+			# keep minimized view intact
+			scale = 1.0
+		# fonts and sizes
+		title_sz = max(10, int(16 * scale))
+		header_emoji_sz = max(16, int(32 * scale))
+		click_sz = max(12, int(24 * scale))
+		label_sz = max(10, int(12 * scale))
+		shop_btn_w = max(48, int(90 * scale))
+		shop_btn_h = max(20, int(30 * scale))
+		shop_font = max(8, int(10 * scale))
+		# apply to widgets
+		try:
+			if hasattr(self, 'logo_label') and isinstance(self.logo_label, tk.Label):
+				# if it's a text label, resize font
+				try:
+					self.logo_label.config(font=('Helvetica', header_emoji_sz))
+				except Exception:
+					pass
+			self.logo_title.config(font=('Helvetica', title_sz, 'bold'))
+			self.val_lemon.config(font=('Helvetica', label_sz))
+			self.val_lps.config(font=('Helvetica', label_sz))
+			self.lbl_lemon.config(font=('Helvetica', label_sz))
+			self.lbl_lps.config(font=('Helvetica', label_sz))
+			# click button
+			try:
+				self.click_button.config(font=('Helvetica', click_sz))
+			except Exception:
+				pass
+			# bottom buttons
+			for btn in (getattr(self, 'save_btn', None), getattr(self, 'load_btn', None), getattr(self, 'reset_btn', None), getattr(self, 'about_btn', None), getattr(self, 'shop_btn', None)):
+				if btn:
+					try:
+						btn.config(font=('Helvetica', max(8, int(10 * scale))))
+					except Exception:
+						pass
+			# shop buttons
+			for item in self.state.shop:
+				if item.id in self.shop_items:
+					wd = self.shop_items[item.id]
+					btn = wd.get('button')
+					if isinstance(btn, ColorButton):
+						btn.set_size(shop_btn_w, shop_btn_h, shop_font)
+					else:
+						try:
+							btn.config(font=('Helvetica', shop_font))
+						except Exception:
+							pass
+		except Exception:
+			pass
+
+	def on_resize(self, event=None):
+		# Called when main window resizes
+		self.apply_scale_for_window()
+
+	# --- Game loop ---
+	def tick(self):
+		# Called every TICK_MS milliseconds to apply LPS income
+		self.state.lemons += self.state.lps * (self.TICK_MS / 1000.0)
+		self.update_ui()
+		self.after(self.TICK_MS, self.tick)
+
+	# --- UI refresh ---
+	def update_ui(self):
+		self.lemons_var.set(format_num(self.state.lemons))
+		self.lps_var.set(format_num(self.state.lps))
+		self.lpc_var.set(format_num(self.state.lpc))
+		# update shop labels and enable/disable buy buttons
+		# colors for buy button states
+		buy_available_bg = '#2ecc71'   # green
+		buy_available_fg = '#ffffff'
+		buy_unavailable_bg = '#95a5a6' # gray
+		buy_unavailable_fg = '#000000'
+		for item in self.state.shop:
+			if item.id not in self.shop_items:
+				# shop UI not created yet (shop window closed) — skip
+				continue
+			widgets = self.shop_items[item.id]
+			cost = self.state.cost_of(item)
+			widgets['cost_var'].set(format_num(cost))
+			widgets['owned_var'].set(f'Owned: {item.owned}')
+			if self.state.lemons >= cost:
+				# enable and set green
+				try:
+					widgets['button'].set_state(True, bg=buy_available_bg, fg=buy_available_fg)
+				except Exception:
+					widgets['button'].config(state='normal', bg=buy_available_bg, fg=buy_available_fg)
+			else:
+				# disable and set gray
+				try:
+					widgets['button'].set_state(False, bg=buy_unavailable_bg, fg=buy_unavailable_fg)
+				except Exception:
+					widgets['button'].config(state='disabled', bg=buy_unavailable_bg, fg=buy_unavailable_fg)
+
+
+if __name__ == '__main__':
+	state = GameState()
+	# try to load on startup (no popups)
+	load_game(state)
+	app = LemonClickerApp(state)
+	app.mainloop()
